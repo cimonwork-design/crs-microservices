@@ -1,0 +1,572 @@
+{
+  "info": {
+    "name": "Buoi 04 - Comprehensive E2E Gateway & Security Tests",
+    "description": "Bo test thong minh co luu bien dong (dynamic chaining), xac thuc 2 lop (Gateway + Service), kiem tra side-effects giam/hoan cho giua cac microservice va verify state sau cac thao tac POST/DELETE.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "gateway_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "admin_token",
+      "value": ""
+    },
+    {
+      "key": "student_token",
+      "value": ""
+    },
+    {
+      "key": "created_course_id",
+      "value": "1"
+    },
+    {
+      "key": "initial_seats",
+      "value": "30"
+    },
+    {
+      "key": "registration_id",
+      "value": "1"
+    },
+    {
+      "key": "random_course_name",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication Flow",
+      "item": [
+        {
+          "name": "1.1 Login ADMIN -> Luu admin_token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Tra ve JWT token hop le va role ADMIN', function () {",
+                  "    pm.expect(jsonData.token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(jsonData.role).to.eql('ADMIN');",
+                  "    pm.expect(jsonData.username).to.eql('admin');",
+                  "});",
+                  "pm.collectionVariables.set('admin_token', jsonData.token);",
+                  "pm.environment.set('admin_token', jsonData.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}"
+            },
+            "url": "{{gateway_url}}/api/auth/login"
+          }
+        },
+        {
+          "name": "1.2 Login STUDENT -> Luu student_token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Tra ve JWT token hop le va role STUDENT', function () {",
+                  "    pm.expect(jsonData.token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(jsonData.role).to.eql('STUDENT');",
+                  "    pm.expect(jsonData.username).to.eql('student1');",
+                  "});",
+                  "pm.collectionVariables.set('student_token', jsonData.token);",
+                  "pm.environment.set('student_token', jsonData.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"student1\",\n  \"password\": \"student123\"\n}"
+            },
+            "url": "{{gateway_url}}/api/auth/login"
+          }
+        },
+        {
+          "name": "1.3 Login SAI password -> 401 Unauthorized",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 401 Unauthorized', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Thong bao loi dung cau truc', function () {",
+                  "    pm.expect(jsonData.message).to.eql('Sai username hoac password');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"sai_password\"\n}"
+            },
+            "url": "{{gateway_url}}/api/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Gateway & Role-Based Security Tests",
+      "item": [
+        {
+          "name": "2.1 GET /api/courses (PUBLIC, khong can token) -> 200 OK",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Public endpoint xem duoc khong can token', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Ket qua co cau truc Pageable', function () {",
+                  "    pm.expect(jsonData).to.have.property('content');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway_url}}/api/courses"
+          }
+        },
+        {
+          "name": "2.2 POST /api/courses KHONG Authorization Header -> 401 (Gateway chan)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Gateway AuthHeaderFilter chan 401 khi thieu header Authorization', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenMonHoc\": \"Mon test khong token\",\n  \"soTinChi\": 3,\n  \"soChoToiDa\": 30\n}"
+            },
+            "url": "{{gateway_url}}/api/courses"
+          }
+        },
+        {
+          "name": "2.3 POST /api/courses bang token STUDENT -> 403 (Course Service chan RBAC)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Course Service tu verify va tra 403 vi STUDENT khong co quyen ADMIN', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{student_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenMonHoc\": \"Mon test student token\",\n  \"soTinChi\": 3,\n  \"soChoToiDa\": 30\n}"
+            },
+            "url": "{{gateway_url}}/api/courses"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Course Management & Verification Flow (Admin)",
+      "item": [
+        {
+          "name": "3.1 POST /api/courses (ADMIN tao mon moi) -> 201 Created & Luu course_id",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "var randomSuffix = Math.floor(Math.random() * 10000);",
+                  "var courseName = 'Kien truc Microservices ' + randomSuffix;",
+                  "pm.collectionVariables.set('random_course_name', courseName);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 201 Created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Thong tin mon hoc tao moi dung', function () {",
+                  "    pm.expect(jsonData.id).to.be.a('number');",
+                  "    pm.expect(jsonData.tenMonHoc).to.eql(pm.collectionVariables.get('random_course_name'));",
+                  "    pm.expect(jsonData.soTinChi).to.eql(3);",
+                  "    pm.expect(jsonData.soChoToiDa).to.eql(30);",
+                  "    pm.expect(jsonData.soChoConLai).to.eql(30);",
+                  "});",
+                  "pm.collectionVariables.set('created_course_id', jsonData.id);",
+                  "pm.environment.set('created_course_id', jsonData.id);",
+                  "pm.collectionVariables.set('initial_seats', jsonData.soChoConLai);",
+                  "pm.environment.set('initial_seats', jsonData.soChoConLai);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{admin_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenMonHoc\": \"{{random_course_name}}\",\n  \"soTinChi\": 3,\n  \"soChoToiDa\": 30\n}"
+            },
+            "url": "{{gateway_url}}/api/courses"
+          }
+        },
+        {
+          "name": "3.2 GET /api/courses/{{created_course_id}} -> Verify chi tiet mon hoc vua tao",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Verify dung mon hoc da tao trong DB', function () {",
+                  "    pm.expect(jsonData.id).to.eql(Number(pm.collectionVariables.get('created_course_id')));",
+                  "    pm.expect(jsonData.tenMonHoc).to.eql(pm.collectionVariables.get('random_course_name'));",
+                  "    pm.expect(jsonData.soChoConLai).to.eql(30);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway_url}}/api/courses/{{created_course_id}}"
+          }
+        },
+        {
+          "name": "3.3 GET /api/courses?keyword=... -> Verify tim kiem va phan trang",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Danh sach tim kiem chua mon hoc vua tao', function () {",
+                  "    var courseName = pm.collectionVariables.get('random_course_name');",
+                  "    var found = jsonData.content.some(function (c) { return c.tenMonHoc === courseName; });",
+                  "    pm.expect(found).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gateway_url}}/api/courses?keyword={{random_course_name}}",
+              "host": ["{{gateway_url}}"],
+              "path": ["api", "courses"],
+              "query": [
+                {
+                  "key": "keyword",
+                  "value": "{{random_course_name}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Inter-Service Registration & Seat Sync Flow",
+      "item": [
+        {
+          "name": "4.1 POST /api/registrations (STUDENT dang ky) -> 201 & Luu registration_id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.test('Status code la 201 Created', function () {",
+                  "        pm.response.to.have.status(201);",
+                  "    });",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('registration_id', jsonData.id);",
+                  "    pm.environment.set('registration_id', jsonData.id);",
+                  "} else {",
+                  "    pm.test('Sinh vien da dang ky mon nay -> Server tu choi dang ky trung', function () {",
+                  "        pm.expect([409, 400, 500]).to.include(pm.response.code);",
+                  "    });",
+                  "    var gatewayUrl = pm.collectionVariables.get('gateway_url') || 'http://localhost:8080';",
+                  "    var studentToken = pm.collectionVariables.get('student_token');",
+                  "    var courseId = Number(pm.collectionVariables.get('created_course_id'));",
+                  "    pm.sendRequest({",
+                  "        url: gatewayUrl + '/api/registrations/student/1',",
+                  "        method: 'GET',",
+                  "        header: { 'Authorization': 'Bearer ' + studentToken }",
+                  "    }, function (err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            var list = res.json();",
+                  "            var matched = list.find(function(r) { return r.trangThai === 'DA_DANG_KY'; });",
+                  "            if (matched) {",
+                  "                pm.collectionVariables.set('registration_id', matched.id);",
+                  "                pm.environment.set('registration_id', matched.id);",
+                  "            }",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{student_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"studentId\": 1,\n  \"courseId\": {{created_course_id}}\n}"
+            },
+            "url": "{{gateway_url}}/api/registrations"
+          }
+        },
+        {
+          "name": "4.1b GET /api/registrations/student/1 (Lay danh sach dang ky cua Sinh vien)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var list = pm.response.json();",
+                  "pm.test('Tra ve danh sach cac mon sinh vien da dang ky', function () {",
+                  "    pm.expect(list).to.be.an('array');",
+                  "});",
+                  "if (list && list.length > 0) {",
+                  "    var activeReg = list.find(function(r) { return r.trangThai === 'DA_DANG_KY'; }) || list[0];",
+                  "    pm.collectionVariables.set('registration_id', activeReg.id);",
+                  "    pm.environment.set('registration_id', activeReg.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{student_token}}" }
+            ],
+            "url": "{{gateway_url}}/api/registrations/student/1"
+          }
+        },
+        {
+          "name": "4.2 GET /api/courses/{{created_course_id}} -> VERIFY soChoConLai da BI TRU 1 (Side-effect)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "var initialSeats = Number(pm.collectionVariables.get('initial_seats'));",
+                  "pm.test('So cho con lai phai giam di 1 cho (tu ' + initialSeats + ' xuong ' + (initialSeats - 1) + ')', function () {",
+                  "    pm.expect(jsonData.soChoConLai).to.eql(initialSeats - 1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway_url}}/api/courses/{{created_course_id}}"
+          }
+        },
+        {
+          "name": "4.3 DELETE /api/registrations/{{registration_id}} (Huy dang ky)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "var regId = pm.collectionVariables.get('registration_id') || pm.environment.get('registration_id');",
+                  "if (!regId || regId === 'null') {",
+                  "    pm.collectionVariables.set('registration_id', '1');",
+                  "    pm.environment.set('registration_id', '1');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Huy dang ky thanh cong (200 OK hoac 204 No Content)', function () {",
+                  "    pm.expect([200, 204]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{student_token}}" }
+            ],
+            "url": "{{gateway_url}}/api/registrations/{{registration_id}}"
+          }
+        },
+        {
+          "name": "4.4 GET /api/courses/{{created_course_id}} -> VERIFY soChoConLai da DUOC HOAN LAI 1 cho",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code la 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "var initialSeats = Number(pm.collectionVariables.get('initial_seats'));",
+                  "pm.test('So cho con lai phai duoc phuc hoi ve ban dau (' + initialSeats + ')', function () {",
+                  "    pm.expect(jsonData.soChoConLai).to.eql(initialSeats);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway_url}}/api/courses/{{created_course_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Partner API Key Access Flow",
+      "item": [
+        {
+          "name": "5.1 GET /api/public/courses (Dung X-API-KEY hop le) -> 200 OK",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doi tac dung API Key hop le truy cap thanh cong 200 OK', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "pm.test('Tra ve danh sach mon hoc', function () {",
+                  "    pm.expect(jsonData).to.have.property('content');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "crs-partner-key-2026"
+              }
+            ],
+            "url": "{{gateway_url}}/api/public/courses"
+          }
+        },
+        {
+          "name": "5.2 GET /api/public/courses (SAI X-API-KEY) -> 403 Forbidden",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Gateway ApiKeyFilter chan 403 khi dung API Key sai', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-KEY",
+                "value": "sai-api-key-partner"
+              }
+            ],
+            "url": "{{gateway_url}}/api/public/courses"
+          }
+        }
+      ]
+    }
+  ]
+}

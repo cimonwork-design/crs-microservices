@@ -1,0 +1,96 @@
+{
+	"info": {
+		"name": "registration-service",
+		"description": "Buổi 3 - Registration Service API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Đăng ký môn học",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"studentId\": 1,\n    \"courseId\": 1\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8083/registrations",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8083",
+					"path": ["registrations"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Đăng ký (course không tồn tại)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"studentId\": 1,\n    \"courseId\": 9999\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8083/registrations",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8083",
+					"path": ["registrations"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Đăng ký (thiếu field - test validation)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"studentId\": 1\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8083/registrations",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8083",
+					"path": ["registrations"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Hủy đăng ký",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8083/registrations/1",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8083",
+					"path": ["registrations", "1"]
+				}
+			},
+			"response": []
+		}
+	]
+}

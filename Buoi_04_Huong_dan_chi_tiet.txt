@@ -1,0 +1,814 @@
+﻿BUỔI 4 — Auth Service (JWT), API Gateway thật &  Phân quyền xuyên Service 
+File: Buoi_04_Huong_dan_chi_tiet.md 
+Điều kiện tiên quyết: đã hoàn thành Buổi 3 — course-service (8082) có CRUD + search/phân trang + API  nội bộ reserve-seat/release-seat; registration-service (8083) gọi liên-service thành công sang course-service. Buổi này khởi tạo 2 service mới (auth-service, api-gateway) và quay lại chỉnh sửa course service/registration-service đã có để thêm xác thực JWT. 
+0. Mục tiêu buổi học 
+Sau buổi học này, sinh viên phải: 
+• Khởi tạo auth-service — service thứ 3, sinh JWT khi đăng nhập thành công. • Khởi tạo api-gateway bằng Spring Cloud Gateway — điểm vào duy nhất của toàn hệ thống, thay  thế việc gọi thẳng cổng 8081/8082/8083 như 3 buổi trước. 
+• Hiểu và tự làm được nguyên tắc bảo mật cốt lõi của microservices: Gateway chặn sớm cho nhẹ tải,  nhưng từng service vẫn phải tự xác thực JWT độc lập, không tin tưởng mù quáng Gateway. • Áp dụng phân quyền Role (ADMIN/STUDENT) trong course-service. 
+• Cấu hình 1 route công khai dùng API Key riêng cho đối tác ngoài, không cần JWT. • Từ buổi này trở đi, mọi test Postman đều đi qua Gateway (localhost:8080), không gọi thẳng service  nữa. 
+A. Khởi tạo auth-service 
+A.1. Tạo project qua Spring Initializr 
+• Artifact: auth-service, cổng 8081, DB auth_db 
+• Dependencies: Spring Web, Spring Data JPA, MySQL Driver, Lombok, Validation, Spring Security Sau đó, mở pom.xml, thêm thủ công thư viện JJWT (Spring Initializr không có sẵn dependency này): 
+<!-- them vao auth-service/pom.xml, trong the <dependencies> dùng cho JDK 21  và SpringBoot 4xx--> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-api</artifactId> 
+ <version>0.12.6</version> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-impl</artifactId> 
+ <version>0.12.6</version> 
+ <scope>runtime</scope> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-jackson</artifactId>
+ <version>0.12.6</version> 
+ <scope>runtime</scope> 
+</dependency> 
+<!-- them vao auth-service/pom.xml, trong the <dependencies> dùng cho JDK 17  và SpringBoot 3xx--> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-api</artifactId> 
+ <version>0.11.5</version> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-impl</artifactId> 
+ <version>0.11.5</version> 
+ <scope>runtime</scope> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-jackson</artifactId> 
+ <version>0.11.5</version> 
+ <scope>runtime</scope> 
+</dependency> 
+Sau khi thêm xong cần đồng bộ lại thư viện (Sync Maven Change – Nút góc trên bên phải):   Tạo DB: 
+CREATE DATABASE auth_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; 
+A.2. application.properties 
+spring.application.name=auth-service 
+# path: auth-service/src/main/resources/application.properties # purpose: cau hinh cong, database va JWT secret cho auth-service 
+server.port=8081 
+spring.datasource.url=jdbc:mysql://localhost:3307/auth_db?useSSL=false&allowPubl icKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh 
+spring.datasource.username=root 
+spring.datasource.password=MAT_KHAU_CUA_BAN 
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true 
+# QUAN TRONG: chuoi bi mat nay phai GIONG HET nhau o auth-service, course service, 
+# registration-service. Day la diem chung DUY NHAT giua cac service ve bao mat. jwt.secret=CRS-Microservices-Secret-Key-Nam-3-Hoc-Ky-2026-Doi-Trong-Thuc-Te jwt.expiration-ms=86400000 
+Giải thích: trong dự án thực tế, jwt.secret sẽ không nằm trong file commit lên Git mà nằm ở biến môi  trường hoặc secret manager. Ở dự án học tập này, để đơn giản, sinh viên chép đúng cùng 1 chuỗi bí mật  vào application.properties của cả 3 service.  
+Lưu ý thêm: đừng commit chuỗi bí mật thật lên GitHub public nếu đây là repo công khai — có thể thêm  dòng "TODO: đổi jwt.secret trước khi deploy thật" trong README. 
+A.3. Entity User và Student 
+User: 
+// path: auth-service/src/main/java/vn/edu/crs/authservice/entity/User.java // purpose: entity luu tai khoan dang nhap, mat khau da ma hoa BCrypt, va  role 
+package vn.edu.crs.authservice.entity; 
+import jakarta.persistence.*; 
+import lombok.AllArgsConstructor; 
+import lombok.Data; 
+import lombok.NoArgsConstructor; 
+@Entity 
+@Table(name = "app_user") 
+@Data 
+@NoArgsConstructor 
+@AllArgsConstructor 
+public class User { 
+ @Id 
+ @GeneratedValue(strategy = GenerationType.IDENTITY) 
+ private Long id; 
+ @Column(nullable = false, unique = true, length = 100) 
+ private String username; 
+ @Column(nullable = false) 
+ private String password; // luon luu dang da ma hoa BCrypt, khong bao gio  luu plain text 
+ @Column(nullable = false, length = 20) 
+ private String role; // "ADMIN" hoac "STUDENT" 
+} 
+Student: 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/entity/Student.java
+// purpose: entity thong tin sinh vien, quan he 1-1 voi User package vn.edu.crs.authservice.entity; 
+import jakarta.persistence.*; 
+import lombok.AllArgsConstructor; 
+import lombok.Data; 
+import lombok.NoArgsConstructor; 
+@Entity 
+@Table(name = "student") 
+@Data 
+@NoArgsConstructor 
+@AllArgsConstructor 
+public class Student { 
+ @Id 
+ @GeneratedValue(strategy = GenerationType.IDENTITY) 
+ private Long id; 
+ @Column(name = "ho_ten", nullable = false, length = 255)  private String hoTen; 
+ @Column(unique = true, length = 100) 
+ private String mssv; 
+ @OneToOne 
+ @JoinColumn(name = "user_id", referencedColumnName = "id", unique = true)  private User user; 
+} 
+Bảng app_user dùng tên khác user vì user là từ khoá dễ đụng độ trên một số phiên bản MySQL. 
+A.4. JwtUtil — sinh và ký JWT 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/security/JwtUtil.java // purpose: sinh JWT khi login thanh cong; class nay se duoc COPY sang  course-service va 
+// registration-service (ban rut gon, chi giu phan validate) de tung service  tu xac thuc token 
+package vn.edu.crs.authservice.security; 
+import io.jsonwebtoken.Jwts; 
+import io.jsonwebtoken.SignatureAlgorithm; 
+import io.jsonwebtoken.security.Keys; 
+import org.springframework.beans.factory.annotation.Value; 
+import org.springframework.stereotype.Component; 
+import javax.crypto.SecretKey; 
+import java.util.Date; 
+@Component 
+public class JwtUtil {
+ @Value("${jwt.secret}") 
+ private String secret; 
+ @Value("${jwt.expiration-ms}") 
+ private long expirationMs; 
+ public String generateToken(String username, String role) {  SecretKey key = Keys.hmacShaKeyFor(secret.getBytes());  Date now = new Date(); 
+ Date expiry = new Date(now.getTime() + expirationMs); 
+ return Jwts.builder() 
+ .setSubject(username) 
+ .claim("role", role) 
+ .setIssuedAt(now) 
+ .setExpiration(expiry) 
+ .signWith(key, SignatureAlgorithm.HS256) 
+ .compact(); 
+ } 
+} 
+A.5. DTO đăng nhập 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/dto/LoginRequestDTO.java // purpose: DTO nhan username/password khi dang nhap 
+package vn.edu.crs.authservice.dto; 
+import jakarta.validation.constraints.NotBlank; 
+import lombok.Data; 
+@Data 
+public class LoginRequestDTO { 
+ @NotBlank(message = "Username khong duoc de trong") 
+ private String username; 
+ @NotBlank(message = "Password khong duoc de trong") 
+ private String password; 
+} 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/dto/LoginResponseDTO.java // purpose: DTO tra ve token va thong tin co ban sau khi dang nhap thanh cong 
+package vn.edu.crs.authservice.dto; 
+import lombok.AllArgsConstructor; 
+import lombok.Data; 
+@Data 
+@AllArgsConstructor 
+public class LoginResponseDTO { 
+ private String token; 
+ private String username;
+ private String role; 
+} 
+A.6. AuthService + AuthController 
+AuthService 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/service/AuthService.java // purpose: logic xac thuc username/password va sinh JWT 
+package vn.edu.crs.authservice.service; 
+import vn.edu.crs.authservice.dto.LoginRequestDTO; 
+import vn.edu.crs.authservice.dto.LoginResponseDTO; 
+import vn.edu.crs.authservice.entity.User; 
+import vn.edu.crs.authservice.exception.InvalidCredentialsException; import vn.edu.crs.authservice.repository.UserRepository; 
+import vn.edu.crs.authservice.security.JwtUtil; 
+import lombok.RequiredArgsConstructor; 
+import org.springframework.security.crypto.password.PasswordEncoder; import org.springframework.stereotype.Service; 
+@Service 
+@RequiredArgsConstructor 
+public class AuthService { 
+ private final UserRepository userRepository; 
+ private final PasswordEncoder passwordEncoder; 
+ private final JwtUtil jwtUtil; 
+ public LoginResponseDTO login(LoginRequestDTO dto) { 
+ User user = userRepository.findByUsername(dto.getUsername())  .orElseThrow(() -> new InvalidCredentialsException("Sai  username hoac password")); 
+ if (!passwordEncoder.matches(dto.getPassword(), user.getPassword()))  { 
+ throw new InvalidCredentialsException("Sai username hoac  password"); 
+ } 
+ String token = jwtUtil.generateToken(user.getUsername(),  user.getRole()); 
+ return new LoginResponseDTO(token, user.getUsername(),  user.getRole()); 
+ } 
+} 
+AuthController 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/controller/AuthController.java // purpose: controller cho dang nhap 
+package vn.edu.crs.authservice.controller;
+import vn.edu.crs.authservice.dto.LoginRequestDTO; 
+import vn.edu.crs.authservice.dto.LoginResponseDTO; 
+import vn.edu.crs.authservice.service.AuthService; 
+import jakarta.validation.Valid; 
+import lombok.RequiredArgsConstructor; 
+import org.springframework.web.bind.annotation.*; 
+@RestController 
+@RequestMapping("/auth") 
+@RequiredArgsConstructor 
+public class AuthController { 
+ private final AuthService authService; 
+ @PostMapping("/login") 
+ public LoginResponseDTO login(@Valid @RequestBody LoginRequestDTO dto) {  return authService.login(dto); 
+ } 
+} 
+UserRepository (đơn giản): 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/repository/UserRepository.java // purpose: repository JPA cho User 
+package vn.edu.crs.authservice.repository; 
+import vn.edu.crs.authservice.entity.User; 
+import org.springframework.data.jpa.repository.JpaRepository; import java.util.Optional; 
+public interface UserRepository extends JpaRepository<User, Long> {  Optional<User> findByUsername(String username); 
+} 
+A.7. SecurityConfig cho auth-service — mở public toàn bộ /auth/** 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/config/SecurityConfig.java // purpose: cau hinh Spring Security cho auth-service - vo hieu hoa form  login mac dinh, 
+// mo public /auth/** vi day la noi CAP PHAT token, chua co token de kiem tra package vn.edu.crs.authservice.config; 
+import org.springframework.context.annotation.Bean; 
+import org.springframework.context.annotation.Configuration; import  
+org.springframework.security.config.annotation.web.builders.HttpSecurity; import org.springframework.security.config.http.SessionCreationPolicy; import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder; import org.springframework.security.crypto.password.PasswordEncoder; import org.springframework.security.web.SecurityFilterChain;
+@Configuration 
+public class SecurityConfig { 
+ @Bean 
+ public PasswordEncoder passwordEncoder() { 
+ return new BCryptPasswordEncoder(); 
+ } 
+ @Bean 
+ public SecurityFilterChain filterChain(HttpSecurity http) throws  Exception { 
+ http 
+ .csrf(csrf -> csrf.disable()) 
+ .sessionManagement(sm ->  
+sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))  .authorizeHttpRequests(auth ->  
+auth.anyRequest().permitAll()); 
+ return http.build(); 
+ } 
+} 
+A.8. Seed dữ liệu mẫu (1 ADMIN, 1 STUDENT) 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/config/DataSeeder.java // purpose: tu dong tao 2 tai khoan mau (admin/student) khi ung dung khoi  dong lan dau 
+package vn.edu.crs.authservice.config; 
+import vn.edu.crs.authservice.entity.Student; 
+import vn.edu.crs.authservice.entity.User; 
+import vn.edu.crs.authservice.repository.UserRepository; 
+import lombok.RequiredArgsConstructor; 
+import org.springframework.boot.CommandLineRunner; 
+import org.springframework.security.crypto.password.PasswordEncoder; import org.springframework.stereotype.Component; 
+@Component 
+@RequiredArgsConstructor 
+public class DataSeeder implements CommandLineRunner { 
+ private final UserRepository userRepository; 
+ private final PasswordEncoder passwordEncoder; 
+ @Override 
+ public void run(String... args) { 
+ if (userRepository.findByUsername("admin").isEmpty()) {  User admin = new User(); 
+ admin.setUsername("admin"); 
+ admin.setPassword(passwordEncoder.encode("admin123"));  admin.setRole("ADMIN"); 
+ userRepository.save(admin); 
+ } 
+ if (userRepository.findByUsername("student1").isEmpty()) {  User student = new User();
+ student.setUsername("student1"); 
+ student.setPassword(passwordEncoder.encode("student123"));  student.setRole("STUDENT"); 
+ userRepository.save(student); 
+ } 
+ } 
+} 
+Tài khoản mẫu: admin / admin123 và student1 / student123 — dùng cho toàn bộ test Postman từ buổi này  trở đi. Nên ghi 2 tài khoản này vào README của repo để cả nhóm dùng chung. 
+A.9. Xử lý lỗi 
+Tạo exception riêng cho lỗi auth 
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/exception/InvalidCredentialsExcepti on.java 
+// purpose: exception rieng cho loi sai username/password, tranh dung chung voi  NoSuchElementException cua JDK 
+package vn.edu.crs.authservice.exception; 
+public class InvalidCredentialsException extends RuntimeException {  public InvalidCredentialsException(String message) { 
+ super(message); 
+ } 
+}
+	
+
+
+
+Global exception handler — bắt cả lỗi auth lẫn lỗi bất ngờ khác, không để lộ stack trace:
+// path: auth 
+service/src/main/java/vn/edu/crs/authservice/exception/GlobalExceptionHandler.ja va 
+// purpose: chuan hoa response loi, tranh lo stack trace/thong tin noi bo ra  client 
+package vn.edu.crs.authservice.exception; 
+import org.springframework.http.HttpStatus; 
+import org.springframework.http.ResponseEntity; 
+import org.springframework.web.bind.annotation.ExceptionHandler; import org.springframework.web.bind.annotation.RestControllerAdvice; import org.springframework.web.context.request.WebRequest; 
+import org.slf4j.Logger; 
+import org.slf4j.LoggerFactory; 
+import java.time.Instant; 
+import java.util.LinkedHashMap; 
+import java.util.Map; 
+@RestControllerAdvice 
+public class GlobalExceptionHandler { 
+ private static final Logger log =  
+LoggerFactory.getLogger(GlobalExceptionHandler.class); 
+ @ExceptionHandler(InvalidCredentialsException.class)
+	
+
+
+
+ public ResponseEntity<Map<String, Object>> handleInvalidCredentials( InvalidCredentialsException ex, WebRequest request) {  return buildResponse(HttpStatus.UNAUTHORIZED, ex.getMessage(), request);  } 
+ // bat moi exception con lai chua duoc xu ly rieng, tranh loi 500 lo stack  trace 
+ @ExceptionHandler(Exception.class) 
+ public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex,  WebRequest request) { 
+ log.error("Unhandled exception at {}", request.getDescription(false),  ex); 
+ return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Da co loi xay  ra, vui long thu lai sau", request); 
+ } 
+ private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status,  String message, WebRequest request) { 
+ Map<String, Object> body = new LinkedHashMap<>(); 
+ body.put("timestamp", Instant.now().toString()); 
+ body.put("status", status.value()); 
+ body.put("error", status.getReasonPhrase()); 
+ body.put("message", message); 
+ body.put("path", request.getDescription(false).replace("uri=", ""));  return ResponseEntity.status(status).body(body); 
+ } 
+}
+	
+
+
+
+Test riêng auth-service trước khi sang phần B:
+Metho 
+d
+	URL 
+	Body 
+	Kỳ vọng
+	POST 
+	http://localhost:8081/auth/logi n
+	{"username":"admin","password":"admin123"} 
+	200, trả 
+token,  
+username , role:  
+"ADMIN"
+	POST 
+	http://localhost:8081/auth/logi n
+	{"username":"admin","password":"saipassword" }
+	401/lỗi rõ  ràng "Sai  username  hoac  
+password "
+	
+
+
+
+Copy giá trị token trả về, dán vào https://jwt.io để thấy trực quan payload bên trong (subject, role, thời  hạn).
+  
+
+B. Khởi tạo api-gateway 
+B.1. Tạo project qua Spring Initializr 
+• Artifact: api-gateway, cổng 8080 
+• Dependencies: tìm và chọn Gateway (Spring Cloud Gateway — reactive) 
+• Lưu ý quan trọng: Spring Cloud Gateway yêu cầu khai báo thêm Spring Cloud BOM khớp version  với Spring Boot đang dùng. Spring Initializr tự làm việc này khi sinh viên chọn dependency Gateway  trực tiếp trên trang web — không cần chỉnh tay pom.xml nếu tạo đúng qua start.spring.io. 
+• Đây là project duy nhất trong 4 service không dùng Spring Web (MVC) mà dùng nền tảng reactive  (WebFlux) — sinh viên không cần hiểu sâu reactive, chỉ cần biết đây là lựa chọn kỹ thuật bắt buộc  của Spring Cloud Gateway.
+  
+
+  
+
+B.2. Cấu hình routing — application.yml 
+Xoá application.properties mặc định, tạo application.yml: 
+# path: api-gateway/src/main/resources/application.yml 
+# purpose: cau hinh cong va bang dinh tuyen cho api-gateway - diem vao duy  nhat cua he thong 
+spring: 
+ cloud: 
+ gateway: 
+ server: 
+ webflux: 
+ routes: 
+ - id: auth-service 
+ uri: http://localhost:8081 
+ predicates: 
+ - Path=/api/auth/** 
+ filters: 
+ - RewritePath=/api/auth/(?<segment>.*), /auth/${segment} 
+ - id: course-service-list 
+ uri: http://localhost:8082
+ predicates: 
+ - Path=/api/courses 
+ filters: 
+ - RewritePath=/api/courses, /courses 
+ - id: course-service-detail 
+ uri: http://localhost:8082 
+ predicates: 
+ - Path=/api/courses/** 
+ filters: 
+ - RewritePath=/api/courses/(?<segment>.*),  /courses/${segment} 
+ - id: registration-service-list 
+ uri: http://localhost:8083 
+ predicates: 
+ - Path=/api/registrations 
+ filters: 
+ - RewritePath=/api/registrations, /registrations 
+ - id: registration-service-detail 
+ uri: http://localhost:8083 
+ predicates: 
+ - Path=/api/registrations/** 
+ filters: 
+ - RewritePath=/api/registrations/(?<segment>.*),  /registrations/${segment} 
+ - id: course-service-partner 
+ uri: http://localhost:8082 
+ predicates: 
+ - Path=/api/public/courses 
+ filters: 
+ - RewritePath=/api/public/courses, /courses 
+# Tạo trước để buổi sau không cần cập nhật 
+ globalcors: 
+ cors-configurations: 
+ '[/**]': 
+ allowedOrigins: "http://localhost:5173" 
+ allowedMethods: "*" 
+ allowedHeaders: "*" 
+jwt: 
+ secret: CRS-Microservices-Secret-Key-Nam-3-Hoc-Ky-2026-Doi-Trong-Thuc-Te 
+partner: 
+ api-key: crs-partner-key-2026 
+management: 
+ endpoints: 
+ web: 
+ exposure: 
+ include: gateway 
+Giải thích RewritePath: Frontend gọi /api/courses, nhưng course-service thật sự lắng nghe ở đường dẫn  /courses (không có tiền tố /api). RewritePath giúp Gateway "dịch" URL bên ngoài sang URL nội bộ tương  ứng — đây chính là lợi ích của Gateway: Frontend không cần biết cấu trúc URL thật của từng service phía 
+sau. 
+Lưu ý route /internal/courses/** của course-service (viết ở Buổi 3) cố tình không được khai báo trong api gateway — nghĩa là không ai từ bên ngoài gọi được tới nó qua Gateway, chỉ registration-service gọi trực  tiếp localhost:8082 (nội bộ) mới tới được. 
+B.3. AuthHeaderFilter — chặn sớm nếu thiếu Header Authorization 
+// path: api 
+gateway/src/main/java/vn/edu/crs/apigateway/filter/AuthHeaderFilter.java // purpose: global filter kiem tra su ton tai cua header Authorization cho  cac route can dang nhap; 
+// day CHI la buoc chan som de tiet kiem tai cho service phia sau, KHONG thay  the viec tung 
+// service tu xac thuc chu ky JWT (xem muc C) 
+package vn.edu.crs.apigateway.filter; 
+import org.springframework.cloud.gateway.filter.GatewayFilterChain; import org.springframework.cloud.gateway.filter.GlobalFilter; import org.springframework.core.Ordered; 
+import org.springframework.http.HttpStatus; 
+import org.springframework.http.server.reactive.ServerHttpRequest; import org.springframework.stereotype.Component; 
+import org.springframework.web.server.ServerWebExchange; 
+import reactor.core.publisher.Mono; 
+import java.util.List; 
+@Component 
+public class AuthHeaderFilter implements GlobalFilter, Ordered { 
+ // Cac duong dan KHONG can Header Authorization 
+ private static final List<String> OPEN_PATHS = List.of( 
+ "/api/auth/login", 
+ "/api/public/courses" 
+ ); 
+ @Override 
+ public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain  chain) { 
+ ServerHttpRequest request = exchange.getRequest(); 
+ String path = request.getURI().getPath(); 
+ boolean isOpen = OPEN_PATHS.stream().anyMatch(path::startsWith);  // GET /api/courses/** la public (xem mon hoc khong can dang nhap),  chi POST/PUT/DELETE moi can token 
+ boolean isPublicCourseRead = path.startsWith("/api/courses") &&  request.getMethod().name().equals("GET"); 
+ if (isOpen || isPublicCourseRead) { 
+ return chain.filter(exchange); 
+ } 
+ if (!request.getHeaders().containsKey("Authorization")) {  exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);  return exchange.getResponse().setComplete(); 
+ }
+ return chain.filter(exchange); 
+ } 
+ @Override 
+ public int getOrder() { 
+ return -1; // chay som, truoc khi request duoc dinh tuyen di  } 
+} 
+B.4. ApiKeyFilter — riêng cho route đối tác /api/public/courses 
+// path: api 
+gateway/src/main/java/vn/edu/crs/apigateway/filter/ApiKeyFilter.java // purpose: kiem tra header X-API-KEY hop le cho route danh cho doi tac ngoai 
+package vn.edu.crs.apigateway.filter; 
+import org.springframework.beans.factory.annotation.Value; 
+import org.springframework.cloud.gateway.filter.GatewayFilterChain; import org.springframework.cloud.gateway.filter.GlobalFilter; import org.springframework.core.Ordered; 
+import org.springframework.http.HttpStatus; 
+import org.springframework.http.server.reactive.ServerHttpRequest; import org.springframework.stereotype.Component; 
+import org.springframework.web.server.ServerWebExchange; 
+import reactor.core.publisher.Mono; 
+@Component 
+public class ApiKeyFilter implements GlobalFilter, Ordered { 
+ @Value("${partner.api-key}") 
+ private String validApiKey; 
+ @Override 
+ public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain  chain) { 
+ ServerHttpRequest request = exchange.getRequest(); 
+ String path = request.getURI().getPath(); 
+ if (!path.startsWith("/api/public/courses")) { 
+ return chain.filter(exchange); 
+ } 
+ String apiKey = request.getHeaders().getFirst("X-API-KEY");  if (apiKey == null || !apiKey.equals(validApiKey)) {  exchange.getResponse().setStatusCode(HttpStatus.FORBIDDEN);  return exchange.getResponse().setComplete(); 
+ } 
+ return chain.filter(exchange); 
+ } 
+ @Override 
+ public int getOrder() { 
+ return -2; // chay truoc AuthHeaderFilter cho chinh route nay  } 
+}
+B.5. CORS — cấu hình duy nhất tại Gateway (dự phòng cho Buổi 5) # them vao cuoi file api-gateway/src/main/resources/application.yml 
+# ĐÃ thêm rồi, chỗ này nhắc ra và giải thích thêm thôi 
+Chưa cần test kỹ CORS ở buổi này (chưa có Frontend) — chỉ cấu hình sẵn để Buổi 5 không phải quay lại  sửa api-gateway. 
+C. Quay lại course-service và registration-service: xác thực JWT  độc lập 
+C.1. Vì sao mỗi service phải tự verify, không tin Gateway? 
+Nếu ai đó (kể cả một service khác trong hệ thống, hoặc một request nội bộ bị cấu hình sai) gọi thẳng  tới localhost:8082 mà bỏ qua Gateway, thì bước kiểm tra Header ở AuthHeaderFilter (mục B.3) hoàn  toàn bị bỏ qua. Nếu course-service không tự xác thực JWT, toàn bộ hệ thống mất an toàn chỉ vì lộ 1  cổng nội bộ. Đây là nguyên tắc Zero Trust thu nhỏ trong phạm vi dự án. 
+C.2. Thêm dependency vào course-service và registration-service Mở pom.xml của cả 2 project, thêm: 
+<dependency> 
+ <groupId>org.springframework.boot</groupId> 
+ <artifactId>spring-boot-starter-security</artifactId> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-api</artifactId> 
+ <version>0.12.6</version> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-impl</artifactId> 
+ <version>0.12.6</version> 
+ <scope>runtime</scope> 
+</dependency> 
+<dependency> 
+ <groupId>io.jsonwebtoken</groupId> 
+ <artifactId>jjwt-jackson</artifactId> 
+ <version>0.12.6</version> 
+ <scope>runtime</scope> 
+</dependency>
+Thêm vào application.properties của cả 2 project (cùng chuỗi bí mật với auth-service): jwt.secret=CRS-Microservices-Secret-Key-Nam-3-Hoc-Ky-2026-Doi-Trong-Thuc-Te 
+C.3. JwtAuthFilter — dùng chung cho cả course-service và registration-service 
+Đây là 1 class giống hệt nhau, copy sang cả 2 project (đổi package tương ứng). Giảng viên nên nhấn  mạnh: đây là ví dụ cụ thể về sự trùng lặp code có chủ đích (deliberate duplication) trong kiến trúc  microservices — đánh đổi giữa việc mỗi service hoàn toàn độc lập (không phụ thuộc thư viện dùng  chung) và việc phải đồng bộ tay khi sửa logic xác thực. 
+// path: course-service/src/main/java/vn/edu/crs/courseservice/security/JwtAuthFilter.java // (copy tuong tu sang registration-service, doi package thanh  
+vn.edu.crs.registrationservice.security) 
+// purpose: tu doc va xac thuc JWT tu header Authorization, KHONG phu thuoc vao viec  Gateway 
+// da kiem tra hay chua - day la nguyen tac "moi service tu ve" 
+package vn.edu.crs.courseservice.security; 
+import io.jsonwebtoken.Claims; 
+import io.jsonwebtoken.Jwts; 
+import io.jsonwebtoken.security.Keys; 
+import jakarta.servlet.FilterChain; 
+import jakarta.servlet.ServletException; 
+import jakarta.servlet.http.HttpServletRequest; 
+import jakarta.servlet.http.HttpServletResponse; 
+import org.springframework.beans.factory.annotation.Value; 
+import  
+org.springframework.security.authentication.UsernamePasswordAuthenticationToken; import org.springframework.security.core.authority.SimpleGrantedAuthority; import org.springframework.security.core.context.SecurityContextHolder; import org.springframework.stereotype.Component; 
+import org.springframework.web.filter.OncePerRequestFilter; 
+import javax.crypto.SecretKey; 
+import java.io.IOException; 
+import java.nio.charset.StandardCharsets; 
+import java.util.List; 
+@Component 
+public class JwtAuthFilter extends OncePerRequestFilter { 
+ @Value("${jwt.secret}") 
+ private String secret; 
+ @Override 
+ protected void doFilterInternal(HttpServletRequest request,  HttpServletResponse response, 
+ FilterChain filterChain) throws  ServletException, IOException { 
+ String authHeader = request.getHeader("Authorization"); 
+ if (authHeader != null && authHeader.startsWith("Bearer ")) {  String token = authHeader.substring(7); 
+ try {
+ // Tạo SecretKey từ chuỗi secret 
+ SecretKey key =  
+Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8)); 
+ // Cú pháp mới cho JJWT 0.12.+ 
+ Claims claims = Jwts.parser() 
+ .verifyWith(key) 
+.build() 
+.parseSignedClaims(token) 
+.getPayload(); 
+ String username = claims.getSubject(); 
+ String role = claims.get("role", String.class); 
+ var authToken = new UsernamePasswordAuthenticationToken(  username, null, List.of(new  
+SimpleGrantedAuthority("ROLE_" + role)) 
+ ); 
+ SecurityContextHolder.getContext().setAuthentication(authToken); 
+ } catch (Exception e) { 
+ SecurityContextHolder.clearContext(); 
+ } 
+ } 
+ filterChain.doFilter(request, response); 
+ } 
+} 
+C.4. SecurityConfig cho course-service — phân quyền ADMIN 
+// path: course 
+service/src/main/java/vn/edu/crs/courseservice/config/SecurityConfig.java // purpose: cau hinh phan quyen - GET /courses public, POST/PUT/DELETE can  ROLE_ADMIN, 
+// /internal/** khong yeu cau JWT vi khong duoc lo ra Gateway (chi goi noi bo tu  registration-service) 
+package vn.edu.crs.course_service.config; 
+import vn.edu.crs.course_service.security.JwtAuthFilter; 
+import lombok.RequiredArgsConstructor; 
+import org.springframework.context.annotation.Bean; 
+import org.springframework.context.annotation.Configuration; 
+import org.springframework.http.HttpMethod; 
+import org.springframework.security.config.annotation.web.builders.HttpSecurity; import org.springframework.security.config.http.SessionCreationPolicy; import org.springframework.security.web.SecurityFilterChain; 
+import  
+org.springframework.security.web.authentication.UsernamePasswordAuthenticationFi lter; 
+@Configuration 
+@RequiredArgsConstructor 
+public class SecurityConfig { 
+ private final JwtAuthFilter jwtAuthFilter;
+ @Bean 
+ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {  http 
+ .csrf(csrf -> csrf.disable()) 
+ .sessionManagement(sm ->  
+sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) 
+ .authorizeHttpRequests(auth -> auth 
+ .requestMatchers("/internal/**").permitAll() // chi goi  tu registration-service qua mang noi bo 
+ .requestMatchers(HttpMethod.GET,  
+"/courses/**").permitAll() 
+ .requestMatchers(HttpMethod.POST,  
+"/courses/**").hasRole("ADMIN") 
+ .requestMatchers(HttpMethod.PUT,  
+"/courses/**").hasRole("ADMIN") 
+ .requestMatchers(HttpMethod.DELETE,  
+"/courses/**").hasRole("ADMIN") 
+ .anyRequest().authenticated() 
+ ) 
+ .addFilterBefore(jwtAuthFilter,  
+UsernamePasswordAuthenticationFilter.class); 
+ return http.build(); 
+ } 
+} 
+C.5. SecurityConfig cho registration-service — chỉ cần đăng nhập (ADMIN  hoặc STUDENT) 
+// path: registration 
+service/src/main/java/vn/edu/crs/registrationservice/config/SecurityConfig.java // purpose: cau hinh - tat ca endpoint /registrations/** deu can dang nhap  (khong phan biet role) 
+package vn.edu.crs.registrationservice.config; 
+import vn.edu.crs.registrationservice.security.JwtAuthFilter; import lombok.RequiredArgsConstructor; 
+import org.springframework.context.annotation.Bean; 
+import org.springframework.context.annotation.Configuration; 
+import org.springframework.security.config.annotation.web.builders.HttpSecurity; import org.springframework.security.config.http.SessionCreationPolicy; import org.springframework.security.web.SecurityFilterChain; 
+import  
+org.springframework.security.web.authentication.UsernamePasswordAuthenticationFi lter; 
+@Configuration 
+@RequiredArgsConstructor 
+public class SecurityConfig { 
+ private final JwtAuthFilter jwtAuthFilter; 
+ @Bean 
+ public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {  http 
+ .csrf(csrf -> csrf.disable()) 
+ .sessionManagement(sm -> 
+sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) 
+ .authorizeHttpRequests(auth -> auth 
+ .requestMatchers("/registrations/**").authenticated() .anyRequest().permitAll() 
+ ) 
+ .addFilterBefore(jwtAuthFilter,  
+UsernamePasswordAuthenticationFilter.class); 
+ return http.build(); 
+ } 
+} 
+Lưu ý: với cấu hình SessionCreationPolicy.STATELESS, nếu JwtAuthFilter không set được Authentication  (token sai/hết hạn/không có), request rơi vào nhánh .authenticated() sẽ tự động bị Spring Security trả về 403 Forbidden — không cần code thêm gì khác. 
+D. Test toàn bộ — CHỈ qua Gateway (localhost:8080) 
+Từ đây, đóng hết các request Postman cũ gọi thẳng 8081/8082/8083, tạo Collection mới api-gateway  với các request sau:
+# 
+	Meth 
+od
+	URL 
+	Header 
+	Body 
+	Kỳ vọng
+	1 
+	POST 
+	http://localhost:8080/api/auth/l ogin
+	— 
+	{"username":"admin","password":"a dmin123"}
+	200, trả 
+JWT
+	
+
+	Lưu lại token nhận được ở bước này, ví dụ: 
+{ 
+"token":  
+"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJBRE1JTiIsImlhdCI6MTc4NTIyOTY2MiwiZ XhwIjoxNzg1MzE2MDYyfQ.j0Hbz2-tO25m5pumiw_a6wmIXqyIfctHzPD76Lp4IKQ", "username": "admin", 
+"role": "ADMIN" 
+}
+	
+
+	Làm tương tự với tài khoản Studen1 đã tạo ở bước A8 
+{ 
+"token":  
+"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzdHVkZW50MSIsInJvbGUiOiJTVFVERU5UIiwiaWF0IjoxNzg1MjMwM DI1LCJleHAiOjE3ODUzMTY0MjV9.ruogk8UWCwPgvw3d8oRvDRFhmvup7MEmOmNj9OHZGEE", "username": "student1", 
+"role": "STUDENT" 
+}
+	
+
+	2 GET 
+	http://localhost:8080/api/cours 
+	— (không 
+	— 
+	200, danh 
+	
+
+
+
+
+
+	
+
+	es 
+	cần token) 
+	
+
+	sách môn  học
+	3 
+	POST 
+	http://localhost:8080/api/cours es
+	(không có  Authorizati on)
+	{...} 
+	401 (chặn  ngay tại  
+Gateway,  mục B.3)
+	
+
+	4 POST 
+	http://localhost:8080/api/cours es
+	Authorizati on: Bearer  <token của  student1>
+	{...} 
+	403 (qua  được  
+Gateway  nhưng  
+course 
+service từ chối vì  
+không  
+phải  
+ADMIN)
+	
+
+	5 POST 
+	http://localhost:8080/api/cours es
+	Authorizati on: Bearer  <token của  admin>
+	{"tenMonHoc":"Kien truc phan  mem","soTinChi":3,"soChoToiDa":30 }
+	201
+	
+
+	6 POST 
+	http://localhost:8080/api/registr ations
+	Authorizati on: Bearer  <token của  student1>
+	{"studentId":1,"courseId":1} 
+	201  
+(Gateway  forward  
+sang  
+registrati on 
+service,  
+service  
+này tự 
+verify  
+JWT rồi  
+mới gọi  
+ngầm  
+sang  
+course 
+service)
+	
+
+	7 GET 
+	http://localhost:8080/api/public /courses
+	X-API-KEY:  crs 
+partner 
+key-2026
+	— 
+	200
+	
+
+
+
+
+
+	8 GET 
+	http://localhost:8080/api/public /courses
+	(sai hoặc  
+thiếu X 
+API-KEY)
+	— 
+	403
+	
+
+
+
+Case 3 và case 4 là 2 case quan trọng nhất cần để thật sự hiểu bài học của buổi này: case 3 bị chặn ở tầng  Gateway (nhanh, nhẹ tải), case 4 vượt qua được Gateway (có Header) nhưng vẫn bị chính course-service từ chối vì role sai — chứng minh 2 lớp bảo vệ độc lập nhau. 
+E. Git commit 
+cd crs-microservices 
+git add auth-service/ 
+git commit -m "init: auth-service with JWT login + seed data" 
+git add api-gateway/ 
+git commit -m "init: api-gateway routing + auth header filter + api key filter" 
+git add course-service/ registration-service/ 
+git commit -m "feat: jwt verification + role-based authorization across services" git push 
+Sản phẩm đầu ra cuối buổi 
+• [ ] auth-service chạy ở cổng 8081, POST /auth/login trả JWT đúng cho cả 2 tài khoản mẫu. • [ ] api-gateway chạy ở cổng 8080, định tuyến đúng cả 3 service theo bảng đã thiết kế từ Buổi 1. • [ ] Gateway chặn sớm được request thiếu Authorization cho route cần đăng nhập (401), và chặn  được X-API-KEY sai cho route đối tác (403). 
+• [ ] course-service và registration-service tự verify được chữ ký JWT bằng chính secret dùng chung,  không phụ thuộc việc Gateway đã lọc hay chưa. 
+• [ ] course-service phân quyền đúng: GET public, POST/PUT/DELETE chỉ ADMIN. • [ ] Toàn bộ test Postman ở mục D chỉ gọi qua localhost:8080, không còn gọi thẳng service nào. • [ ] Git có 3 commit tách riêng theo đúng phần việc. 
+Lỗi thường gặp & cách xử lý nhanh
+Triệu chứng 
+	Nguyên nhân thường gặp 
+	Cách xử lý
+	Gọi qua Gateway luôn trả 404  dù service phía sau chạy đúng
+	Thiếu hoặc sai RewritePath  trong application.yml
+	Kiểm tra lại B.2, thử log path thật  nhận được ở course-service
+	JWT hợp lệ ở auth-service 
+	jwt.secret giữa 2 service không 
+	So sánh lại từng ký tự trong 
+	
+
+
+
+nhưng course-service báo  token invalid
+	giống nhau tuyệt đối  
+(thừa/thiếu khoảng trắng)
+	application.properties của cả 3  service
+	Mọi request đều trả 403 dù có  token đúng
+	Quên  
+addFilterBefore(jwtAuthFilter, ...)  trong SecurityConfig, filter  không chạy
+	Xem lại C.4/C.5
+	Route /api/public/courses báo  401 dù đã gửi đúng X-API-KEY
+	AuthHeaderFilter (mục B.3) chạy  trước và vẫn đòi Authorization  vì thiếu trong OPEN_PATHS
+	Kiểm tra lại danh sách  
+OPEN_PATHS, đảm bảo  
+/api/public/courses có trong đó
+	api-gateway không khởi động  được, báo lỗi liên quan spring cloud-starter-gateway
+	Version Spring Boot và Spring  Cloud không tương thích  (thường do sửa tay version  trong pom.xml)
+	Tạo lại project qua start.spring.io,  không tự chỉnh version Spring  Cloud
+	registration-service gọi sang  course-service (API nội bộ) bị 401/403
+	Nhầm áp SecurityConfig chặn  luôn cả /internal/**
+	Kiểm tra lại C.4 — /internal/** phải  là permitAll()

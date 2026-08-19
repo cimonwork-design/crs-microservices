@@ -1,0 +1,17 @@
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: crs-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - crs-mysql-data:/var/lib/mysql
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    command: --default-authentication-plugin=mysql_native_password
+
+volumes:
+  crs-mysql-data:
