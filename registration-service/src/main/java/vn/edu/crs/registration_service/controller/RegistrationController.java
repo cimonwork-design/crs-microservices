@@ -6,7 +6,10 @@ import vn.edu.crs.registration_service.service.RegistrationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/registrations")
@@ -21,8 +24,14 @@ public class RegistrationController {
         return registrationService.register(dto);
     }
 
+    @GetMapping("/my")
+    public List<Registration> getMyRegistrations(Authentication authentication) {
+        Long studentId = (Long) authentication.getCredentials();
+        return registrationService.getMyRegistrations(studentId);
+    }
+
     @GetMapping("/student/{studentId}")
-    public java.util.List<Registration> getByStudentId(@PathVariable Long studentId) {
+    public List<Registration> getByStudentId(@PathVariable Long studentId) {
         return registrationService.getByStudentId(studentId);
     }
 

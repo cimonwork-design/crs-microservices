@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -28,7 +29,7 @@ public class RegistrationService {
         if (existingOpt.isPresent()) {
             Registration existing = existingOpt.get();
             if (DA_DANG_KY.equals(existing.getTrangThai())) {
-                throw new IllegalStateException("Sinh viên đã đăng ký môn học này rồi");
+                throw new IllegalStateException("Sinh vien da dang ky mon hoc nay roi");
             }
 
             courseClient.reserveSeat(dto.getCourseId());
@@ -50,10 +51,10 @@ public class RegistrationService {
 
     public void cancel(Long registrationId) {
         Registration registration = registrationRepository.findById(registrationId)
-                .orElseThrow(() -> new NoSuchElementException("Không tìm thấy đăng ký id = " + registrationId));
+                .orElseThrow(() -> new NoSuchElementException("Khong tim thay dang ky id = " + registrationId));
 
         if (DA_HUY.equals(registration.getTrangThai())) {
-            throw new IllegalStateException("Đăng ký này đã được hủy trước đó");
+            throw new IllegalStateException("Dang ky nay da duoc huy truoc do");
         }
 
         courseClient.releaseSeat(registration.getCourseId());
@@ -62,7 +63,11 @@ public class RegistrationService {
         registrationRepository.save(registration);
     }
 
-    public java.util.List<Registration> getByStudentId(Long studentId) {
+    public List<Registration> getByStudentId(Long studentId) {
+        return registrationRepository.findByStudentId(studentId);
+    }
+
+    public List<Registration> getMyRegistrations(Long studentId) {
         return registrationRepository.findByStudentId(studentId);
     }
 }
